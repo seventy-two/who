@@ -301,6 +301,7 @@ void App::loadConfig() {
             cfg_.placed = cfg_.w > 0 && cfg_.h > 0;
         }
         cfg_.open = j.value("open", "");
+        cfg_.hideChats = j.value("hideChats", false);
     } catch (...) {
     }
 }
@@ -309,6 +310,7 @@ void App::saveConfig() {
     json j;
     if (cfg_.placed) j["window"] = {{"x", cfg_.x}, {"y", cfg_.y}, {"w", cfg_.w}, {"h", cfg_.h}};
     j["open"] = open_;
+    j["hideChats"] = cfg_.hideChats;
     std::ofstream out(fs::u8path(dir_) / "config.json");
     out << j.dump(2) << "\n";
 }
@@ -567,6 +569,7 @@ void App::onEvent(const json& e) {
                 found = true;
             }
         if (!found) chats_.push_back(c);
+        if (c.unread == 0) dropNotices(c.jid);  // read here or on the phone
     } else if (t == "messages") {
         std::string chat = str(e, "chat");
         auto& c = convos_[chat];
@@ -684,9 +687,20 @@ void App::openChat(const std::string& jid) {
     if (!c.loaded) loadMessages(jid, false);
     c.toBottom = true;
     markRead(jid);
-    // Notices from this chat are seen now.
-    for (auto it = notices_.begin(); it != notices_.end();) it = it->chat == jid ? notices_.erase(it) : std::next(it);
-    unseen_ = std::min<int>(unseen_, int(notices_.size()));
+    dropNotices(jid);
+}
+
+void App::dropNotices(const std::string& jid) {
+    int dropped = 0;
+    for (auto it = notices_.begin(); it != notices_.end();) {
+        if (it->chat == jid) {
+            it = notices_.erase(it);
+            dropped++;
+        } else {
+            ++it;
+        }
+    }
+    unseen_ = std::clamp(unseen_ - dropped, 0, int(notices_.size()));
 }
 
 void App::loadMessages(const std::string& jid, bool older) {
@@ -939,8 +953,12 @@ void App::Frame() {
         (state_ != "connected" && chats_.empty())) {
         drawSignIn(0, top, io.DisplaySize.x, h);
     } else {
-        float side = std::clamp(io.DisplaySize.x * 0.3f, 220 * k, 340 * k);
-        drawChats(0, top, side, h);
+        // Looking at a chat sees its notices (they also go when it's read on the phone).
+        if (!open_.empty() && GetForegroundWindow() == hwnd_ && Visible()) dropNotices(open_);
+        // The chat list can be folded away; it comes back while searching or with no chat open.
+        bool showChats = !cfg_.hideChats || filter_[0] || searchOpen_ || open_.empty();
+        float side = showChats ? std::clamp(io.DisplaySize.x * 0.3f, 220 * k, 340 * k) : 0;
+        if (showChats) drawChats(0, top, side, h);
         drawConversation(side, top, io.DisplaySize.x - side, h);
     }
     if (!viewer_.empty()) drawViewer();
@@ -982,6 +1000,16 @@ void App::drawTitle(float width) {
 
     // Search: a magnifying glass that opens a box beside it (Ctrl+F too).
     float sx = width - 5 * 28 * k - 4 * k;
+    // Fold the chat list away (Ctrl+B), left of search.
+    ImGui::SetCursorPos(ImVec2(sx - 28 * k - (searchOpen_ || filter_[0] ? std::min(240 * k, width * 0.3f) + 8 * k : 0), 5 * k));
+    bool toggle = ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_B);
+    if (iconButton(icon::List, cfg_.hideChats ? "Show the chat list (Ctrl+B)" : "Hide the chat list (Ctrl+B)",
+                   cfg_.hideChats, 28))
+        toggle = true;
+    if (toggle) {
+        cfg_.hideChats = !cfg_.hideChats;
+        saveConfig();
+    }
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) {
         searchOpen_ = true;
         focusSearch_ = true;
@@ -1443,7 +1471,8 @@ void App::drawMessage(Message& m, const Conversation&, float width, bool firstOf
         rx += 16 * k;
         std::string rn = m.replyName;
         if (!rn.empty() && rn[0] == '~') rn.erase(0, 1);
-        ImU32 rc = rn == "You" ? U32(p.good) : nameColour(rn);
+        if (rn == "You") rn = "me";
+        ImU32 rc = rn == "me" ? U32(p.good) : nameColour(rn);
         rx += Label(dl, fonts_.semibold, kSmall, ImVec2(rx, ry), rc, "@" + rn, 0, imageFor) + 6 * k;
         Label(dl, fonts_.regular, kSmall, ImVec2(rx, ry), U32(p.muted), m.replyText, o.x + left + contentW - rx, imageFor);
         ImGui::PopFont();

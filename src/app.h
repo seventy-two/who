@@ -98,6 +98,7 @@ private:
     void loadConfig();
     void saveConfig();
     void notify(const Notice& n);
+    void dropNotices(const std::string& jid);  // that chat's been seen
 
     // Drawing.
     void drawTitle(float width);
@@ -170,6 +171,7 @@ private:
         int x = 0, y = 0, w = 0, h = 0;
         std::string open;
         bool online = false;
+        bool hideChats = false;  // the chat list folded away
     } cfg_;
     ImVec2 barMax_;
     std::vector<std::pair<ImVec2, ImVec2>> hot_;

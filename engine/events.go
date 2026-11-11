@@ -27,6 +27,24 @@ func (n *Names) setGroup(jid, name string) {
 }
 
 // Of names a user or group JID.
+// isMe says whether jid is this account, by phone number or by LID (groups
+// quote your own messages by LID).
+func (n *Names) isMe(jid types.JID) bool {
+	st := n.e.cli.Store
+	if st.ID != nil && jid.User == st.ID.User {
+		return true
+	}
+	if !st.LID.IsEmpty() && jid.User == st.LID.User {
+		return true
+	}
+	if jid.Server == types.HiddenUserServer && st.ID != nil {
+		if pn, err := st.LIDs.GetPNForLID(n.e.ctx, jid); err == nil && pn.User == st.ID.User {
+			return true
+		}
+	}
+	return false
+}
+
 func (n *Names) Of(jidStr string) string {
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
@@ -41,7 +59,7 @@ func (n *Names) Of(jidStr string) string {
 		}
 		return "Group"
 	}
-	if n.e.cli.Store.ID != nil && jid.User == n.e.cli.Store.ID.User {
+	if n.isMe(jid) {
 		return "You"
 	}
 	ctx := n.e.ctx
