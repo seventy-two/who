@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -29,11 +30,40 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
+// Height of a waiting attachment's preview in the composer, before scaling.
+constexpr float kPendingTile = 84;
+
 int64_t nowMs() {
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     ULARGE_INTEGER u{ft.dwLowDateTime, ft.dwHighDateTime};
     return int64_t(u.QuadPart / 10000) - 11644473600000LL;
+}
+
+// writePng saves 32-bit BGRA pixels as a PNG.
+bool writePng(const std::wstring& out, int w, int h, const std::vector<BYTE>& bgra) {
+    ComPtr<IWICImagingFactory> wic;
+    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> enc;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    if (!wic || FAILED(wic->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(out.c_str(), GENERIC_WRITE)) ||
+        FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc)) ||
+        FAILED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache)) || FAILED(enc->CreateNewFrame(&frame, nullptr)) ||
+        FAILED(frame->Initialize(nullptr)))
+        return false;
+    frame->SetSize(w, h);
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    frame->SetPixelFormat(&fmt);
+    frame->WritePixels(h, w * 4, UINT(bgra.size()), const_cast<BYTE*>(bgra.data()));
+    return SUCCEEDED(frame->Commit()) && SUCCEEDED(enc->Commit());
+}
+
+// isPicture says whether a file to send can be previewed as an image.
+bool isPicture(const std::string& path) {
+    std::string ext = fs::u8path(path).extension().u8string();
+    for (auto& ch : ext) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif" || ext == ".bmp";
 }
 
 std::tm localTm(int64_t ms) {
@@ -268,6 +298,38 @@ void App::demo() {
     Message& d = msg("b", "Sam Okafor", false, 25 * 60000, "document", "");
     d.fileName = "sowing-calendar.pdf";
     d.size = 241000;
+    // A drawn "photo" (sky, sun and a hill) for the image row and viewer.
+    {
+        const int pw = 640, ph = 420;
+        std::vector<BYTE> px(size_t(pw) * ph * 4);
+        for (int yy = 0; yy < ph; yy++)
+            for (int xx = 0; xx < pw; xx++) {
+                BYTE* o = &px[(size_t(yy) * pw + xx) * 4];
+                float t = float(yy) / ph;
+                float hill = ph * 0.62f + 40 * std::sin(xx / 90.0f);
+                float dx = xx - 470.0f, dy = yy - 120.0f;
+                if (yy > hill) {
+                    o[0] = 60, o[1] = BYTE(150 - 40 * t), o[2] = 70;
+                } else if (dx * dx + dy * dy < 45 * 45) {
+                    o[0] = 120, o[1] = 220, o[2] = 255;
+                } else {
+                    o[0] = BYTE(240 - 60 * t), o[1] = BYTE(190 - 40 * t), o[2] = BYTE(120 + 60 * t);
+                }
+                o[3] = 255;
+            }
+        std::wstring photo = Widen(dir_) + L"\\media\\demo-photo.png";
+        std::error_code ec;
+        fs::create_directories(fs::path(photo).parent_path(), ec);
+        if (writePng(photo, pw, ph, px)) {
+            Message& pm = msg("c", "Lena Brook", false, 20 * 60000, "image", "Sunset over the plots last night");
+            pm.media = Narrow(photo);
+            pm.width = pw;
+            pm.height = ph;
+            // WHO_ATTACH=1 shows files waiting to be sent.
+            if (const char* a = std::getenv("WHO_ATTACH"); a && *a)
+                pendingFiles_ = {Narrow(photo), Narrow(Widen(dir_) + L"\\minutes-november.docx")};
+        }
+    }
     Message& r = msg("me", "You", true, 10 * 60000, "text", "Courgettes everywhere again \xF0\x9F\xA5\x92 swap you some for the rhubarb? https://example.org/recipes");
     r.replyId = "2";
     r.replyName = "You";
@@ -821,24 +883,10 @@ void App::pasteFromClipboard() {
                     o[3] = 255;
                 }
             }
-            ComPtr<IWICImagingFactory> wic;
-            CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
             std::wstring out = Widen(dir_) + L"\\media\\pasted-" + std::to_wstring(nowMs()) + L".png";
-            ComPtr<IWICStream> stream;
-            ComPtr<IWICBitmapEncoder> enc;
-            ComPtr<IWICBitmapFrameEncode> frame;
-            if (wic && SUCCEEDED(wic->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(out.c_str(), GENERIC_WRITE)) &&
-                SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc)) &&
-                SUCCEEDED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
-                SUCCEEDED(enc->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr))) {
-                frame->SetSize(w, hgt);
-                WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
-                frame->SetPixelFormat(&fmt);
-                frame->WritePixels(hgt, w * 4, UINT(rgba.size()), rgba.data());
-                frame->Commit();
-                enc->Commit();
-                paths.push_back(Narrow(out));
-            }
+            std::error_code ec;
+            fs::create_directories(fs::path(out).parent_path(), ec);
+            if (writePng(out, w, hgt, rgba)) paths.push_back(Narrow(out));
         }
         if (bi) GlobalUnlock(h);
     }
@@ -1351,7 +1399,7 @@ void App::drawConversation(float x, float y, float w, float h) {
     for (const char* c = compose_; *c; c++) lines += *c == '\n';
     lines = std::clamp(lines, 1, 6);
     float lineH = ImGui::GetFontSize() > 0 ? (kBody * k * 1.35f) : 20 * k;
-    float extra = (!replyTo_.empty() ? 36 * k : 0) + (!pendingFiles_.empty() ? 32 * k : 0);
+    float extra = (!replyTo_.empty() ? 36 * k : 0) + (!pendingFiles_.empty() ? (kPendingTile + 26) * k : 0);
     float compH = lines * lineH + 30 * k + extra;
     float listY = y + headH + 1, listH = h - headH - 1 - compH;
 
@@ -1655,11 +1703,15 @@ void App::drawMedia(Message& m, float maxW) {
             dl->AddText(ImVec2(a.x + 6 * k, a.y + 6 * k), U32(p.idle), "not available");
             ImGui::PopFont();
         }
-        ImGui::SetNextItemAllowOverlap();
-        if (ImGui::InvisibleButton("##media", ImVec2(w, h))) wantMedia(m, still ? 3 : 1);
+        // Not overlappable: the row's button is submitted later and would take
+        // the hover. Right-click here opens the row's menu instead.
+        if (ImGui::InvisibleButton("##media", ImVec2(w, h), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight) &&
+            ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            wantMedia(m, still ? 3 : 1);
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) ImGui::OpenPopup("##msg");
         if (ImGui::IsItemHovered()) {
             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-            if (m.kind == "video" || m.kind == "gif") ImGui::SetTooltip("Open in your video player");
+            ImGui::SetTooltip("%s", still ? "Click to expand" : "Open in your video player");
         }
         ImGui::Dummy(ImVec2(0, 2 * k));
         return;
@@ -1767,17 +1819,65 @@ void App::drawComposer(float x, float y, float w, float h) {
         cy += 36 * k;
     }
     if (!pendingFiles_.empty()) {
-        std::string names;
-        for (const auto& f : pendingFiles_) names += (names.empty() ? "" : ", ") + fs::u8path(f).filename().u8string();
-        ImGui::SetCursorScreenPos(ImVec2(x + 12 * k, cy));
-        ImGui::PushFont(fonts_.regular, kSmall);
-        dl->AddText(ImVec2(x + 14 * k, cy + 4 * k), U32(p.accent), icon::Attach);
-        Label(dl, fonts_.regular, kSmall, ImVec2(x + 34 * k, cy + 3 * k), U32(p.text),
-              names + "  (Enter sends; the text becomes the caption)", w - 110 * k, imageFor);
-        ImGui::PopFont();
+        // Previews of what's about to go, so nothing goes by mistake: pictures
+        // as thumbnails (click to see one full size), other files by name.
+        const float tileH = kPendingTile * k;
+        float tx = x + 12 * k, right = x + w - 48 * k;
+        int remove = -1;
+        size_t shown = 0;
+        for (size_t i = 0; i < pendingFiles_.size(); i++) {
+            const std::string& f = pendingFiles_[i];
+            std::string name = fs::u8path(f).filename().u8string();
+            bool pic = isPicture(f);
+            ImTextureID tex = pic ? fileImage(f) : ImTextureID(0);
+            const Texture* t = tex ? images_->Get("file:" + f) : nullptr;
+            float tw = t && t->height > 0 ? std::clamp(tileH * t->width / t->height, 40 * k, 180 * k) : (pic ? tileH : 150 * k);
+            if (i > 0 && tx + tw > right) break;
+            ImVec2 a(tx, cy), b(tx + tw, cy + tileH);
+            if (tex) {
+                dl->AddImage(tex, a, b);
+            } else {
+                dl->AddRectFilled(a, b, U32(p.code), 4 * k);
+                ImGui::PushFont(fonts_.regular, kSmall);
+                dl->AddText(ImVec2(a.x + 8 * k, a.y + 8 * k), U32(p.accent), pic ? "\xE2\x80\xA6" : icon::Attach);
+                ImGui::PopFont();
+                if (!pic)
+                    Label(dl, fonts_.regular, kSmall - 1, ImVec2(a.x + 8 * k, b.y - 22 * k), U32(p.text), name, tw - 16 * k, imageFor);
+            }
+            dl->AddRect(a, b, U32(p.border), 4 * k);
+            ImGui::PushID(int(i));
+            ImGui::SetCursorScreenPos(a);
+            ImGui::SetNextItemAllowOverlap();  // the remove button sits on top
+            if (ImGui::InvisibleButton("##pending", ImVec2(tw, tileH)) && pic) viewer_ = f;
+            bool hovered = ImGui::IsItemHovered();
+            if (hovered) ImGui::SetTooltip("%s%s", name.c_str(), pic ? "\nClick to see it full size" : "");
+            if (hovered || ImGui::IsMouseHoveringRect(a, b)) {
+                if (pic) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImVec2 c(b.x - 11 * k, a.y + 11 * k);
+                dl->AddCircleFilled(c, 9 * k, IM_COL32(0, 0, 0, 170));
+                ImGui::PushFont(fonts_.regular, kSmall - 2);
+                ImVec2 ts = ImGui::CalcTextSize(icon::Dismiss);
+                dl->AddText(ImVec2(c.x - ts.x / 2, c.y - ts.y / 2), IM_COL32(255, 255, 255, 230), icon::Dismiss);
+                ImGui::PopFont();
+                ImGui::SetCursorScreenPos(ImVec2(c.x - 9 * k, c.y - 9 * k));
+                if (ImGui::InvisibleButton("##drop", ImVec2(18 * k, 18 * k))) remove = int(i);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Don't send this one");
+            }
+            ImGui::PopID();
+            tx += tw + 8 * k;
+            shown++;
+        }
+        std::string note = std::to_string(pendingFiles_.size()) + (pendingFiles_.size() == 1 ? " file" : " files") +
+                           (shown < pendingFiles_.size() ? " (" + std::to_string(pendingFiles_.size() - shown) + " more not shown)" : "") +
+                           "  \xC2\xB7  Enter sends; the text becomes the caption";
+        Label(dl, fonts_.regular, kSmall - 1, ImVec2(x + 14 * k, cy + tileH + 4 * k), U32(p.muted), note, w - 70 * k, imageFor);
         ImGui::SetCursorScreenPos(ImVec2(x + w - 42 * k, cy - 1 * k));
-        if (iconButton(icon::Dismiss, "Don't send these", false, 26)) pendingFiles_.clear();
-        cy += 32 * k;
+        if (iconButton(icon::Dismiss, "Don't send any of these", false, 26)) pendingFiles_.clear();
+        if (remove >= 0 && remove < int(pendingFiles_.size())) {
+            pendingFiles_.erase(pendingFiles_.begin() + remove);
+            focusComposer_ = true;
+        }
+        cy += tileH + 26 * k;
     }
     ImGui::SetCursorScreenPos(ImVec2(x + 8 * k, cy));
     if (iconButton(icon::Attach, "Attach files (or paste, or drop them here)", false, 30)) pickFiles();
@@ -1829,11 +1929,21 @@ void App::drawComposer(float x, float y, float w, float h) {
         pasteFromClipboard();
 }
 
+// drawViewer shows a picture full size, in a window over everything so its
+// clicks never reach the chat underneath.
 void App::drawViewer() {
     const float k = scale_;
     ImGuiIO& io = ImGui::GetIO();
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 220));
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::SetNextWindowFocus();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0.86f));
+    ImGui::Begin("##viewer", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     ImTextureID tex = fileImage(viewer_, true);
     const Texture* t = tex ? images_->Get("full:" + viewer_) : nullptr;
     if (tex && t) {
@@ -1848,8 +1958,15 @@ void App::drawViewer() {
     const char* help = "Click or Esc to close  \xC2\xB7  O opens it in your viewer";
     ImVec2 hs = ImGui::CalcTextSize(help);
     dl->AddText(ImVec2((io.DisplaySize.x - hs.x) / 2, io.DisplaySize.y - 40 * k), IM_COL32(255, 255, 255, 170), help);
+    bool close = ImGui::InvisibleButton("##close", io.DisplaySize);
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
     if (ImGui::IsKeyPressed(ImGuiKey_O)) openPath(viewer_);
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(ImGuiMouseButton_Left)) viewer_.clear();
+    if (close || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        viewer_.clear();
+        focusComposer_ = true;
+    }
 }
 
 }  // namespace who
