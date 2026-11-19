@@ -988,8 +988,24 @@ bool App::iconButton(const char* glyph, const char* tip, bool on, float size, bo
     return pressed;
 }
 
+// inputGlow draws a soft accent halo just outside an input box, so it's
+// clear which box is taking what you type.
+static void inputGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImVec4 c, float k) {
+    for (int i = 4; i >= 1; i--) {
+        ImVec4 col = c;
+        col.w = 0.07f * (5 - i);
+        float d = (i - 0.5f) * k;
+        dl->AddRect(ImVec2(a.x - d, a.y - d), ImVec2(b.x + d, b.y + d), ImGui::GetColorU32(col), 0, 0, k);
+    }
+    c.w = 0.75f;
+    dl->AddRect(a, b, ImGui::GetColorU32(c), 0, 0, k);
+}
+
 void App::Frame() {
     hot_.clear();
+    // Typing only lands here while the window is in front, so the caret and
+    // the glow show only then (WHO_FOCUSED fakes it for off-screen demo shots).
+    typingFocus_ = GetForegroundWindow() == hwnd_ || (demo_ && std::getenv("WHO_FOCUSED"));
     const Palette& p = Colours();
     ImGuiIO& io = ImGui::GetIO();
     const float k = scale_;
@@ -1077,11 +1093,15 @@ void App::drawTitle(float width) {
         }
         ImGui::PushFont(fonts_.regular, kSmall + 0.5f);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8 * k, 4 * k));
+        if (!typingFocus_) ImGui::PushStyleColor(ImGuiCol_InputTextCursor, ImVec4(0, 0, 0, 0));
         ImGui::InputTextWithHint("##filter", "Search chats", filter_, sizeof(filter_));
+        if (!typingFocus_) ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         ImGui::PopFont();
         hot_.push_back({ImGui::GetItemRectMin(), ImGui::GetItemRectMax()});
         bool active = ImGui::IsItemActive();
+        if (active && typingFocus_)
+            inputGlow(ImGui::GetWindowDrawList(), ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), Colours().accent, k);
         if (active && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             filter_[0] = 0;
             searchOpen_ = false;
@@ -1914,11 +1934,14 @@ void App::drawComposer(float x, float y, float w, float h) {
     ImGui::PushFont(fonts_.regular, kBody);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * k, 7 * k));
     ImGui::PushStyleColor(ImGuiCol_FrameBg, p.input);
+    if (!typingFocus_) ImGui::PushStyleColor(ImGuiCol_InputTextCursor, ImVec4(0, 0, 0, 0));
     // Without EnterReturnsTrue (Shift held) it returns true on any edit, so
     // only an Enter press without Shift sends.
     bool enter = ImGui::InputTextMultiline("##compose", compose_, sizeof(compose_), ImVec2(inputW, inputH), fl) && !shift &&
                  (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
     bool active = ImGui::IsItemActive();
+    if (!typingFocus_) ImGui::PopStyleColor();
+    if (active && typingFocus_) inputGlow(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), p.accent, k);
     if (ImGui::IsItemEdited() && compose_[0] && !open_.empty()) {
         double now = ImGui::GetTime();
         if (!typingSent_ || now - lastTypingSent_ > 4) {

@@ -146,6 +146,7 @@ private:
     std::string replyTo_;
     std::vector<std::string> pendingFiles_;  // dropped or pasted, waiting for Send
     bool focusComposer_ = false;
+    bool typingFocus_ = true;  // window in front, so typing reaches its inputs
 
     // Media.
     int nextReq_ = 1;
