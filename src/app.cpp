@@ -330,12 +330,16 @@ void App::demo() {
                 pendingFiles_ = {Narrow(photo), Narrow(Widen(dir_) + L"\\minutes-november.docx")};
         }
     }
+    msg("me", "You", true, 11 * 60000, "text", "Back from the plot")
+        .status = "read";
     Message& r = msg("me", "You", true, 10 * 60000, "text", "Courgettes everywhere again \xF0\x9F\xA5\x92 swap you some for the rhubarb? https://example.org/recipes");
     r.replyId = "2";
     r.replyName = "You";
     r.replyText = "Anyone want rhubarb? I've got far too much";
     r.reactions = {{"\xF0\x9F\x91\x8D", {"Dot Wheeler", "Sam Okafor"}}, {"\xE2\x9D\xA4\xEF\xB8\x8F", {"Lena Brook"}}};
     r.status = "delivered";
+    msg("me", "You", true, 9 * 60000, "text", "They're huge this year").status = "delivered";
+    msg("me", "You", true, 8 * 60000, "text", "Bring a bag").status = "sent";
     msg("c", "Lena Brook", false, 60000, "text", "\xF0\x9F\x98\x82\xF0\x9F\x98\x82");
     msg("a", "Dot Wheeler", false, 30000, "deleted", "");
     notices_.push_front({"1@g.us", "Allotment Society", "Lena Brook", "\xF0\x9F\x98\x82\xF0\x9F\x98\x82", now - 60000, true});
@@ -1360,6 +1364,13 @@ void App::drawChats(float x, float y, float w, float h) {
     ImGui::EndChild();
 }
 
+// receiptTier ranks a message's receipt: 0 sent (or pending), 1 delivered,
+// 2 read or played.
+static int receiptTier(const std::string& status) {
+    if (status == "read" || status == "played") return 2;
+    return status == "delivered" ? 1 : 0;
+}
+
 void App::drawConversation(float x, float y, float w, float h) {
     const Palette& p = Colours();
     const float k = scale_;
@@ -1436,6 +1447,7 @@ void App::drawConversation(float x, float y, float w, float h) {
         int lastDay = -1;
         std::string lastSender;
         int64_t lastTs = 0;
+        int lastTier = -1;
         bool alt = true;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0));
         for (auto& m : conv.messages) {
@@ -1457,11 +1469,16 @@ void App::drawConversation(float x, float y, float w, float h) {
             }
             bool first = m.sender != lastSender || m.ts - lastTs > 10 * 60 * 1000;
             if (first) alt = !alt;
+            // Within a run of your own messages, ticks show only where the
+            // receipt changes, so the first unread one stands out.
+            int tier = receiptTier(m.status);
+            bool tickChange = m.fromMe && !first && tier != lastTier;
             ImGui::PushID(m.id.c_str());
-            drawMessage(m, conv, inner, first, *chat, alt);
+            drawMessage(m, conv, inner, first, *chat, alt, tickChange);
             ImGui::PopID();
             lastSender = m.sender;
             lastTs = m.ts;
+            lastTier = tier;
         }
         ImGui::PopStyleVar();
         if (conv.messages.empty()) ImGui::TextColored(p.muted, "No messages here yet.");
@@ -1489,7 +1506,8 @@ void App::drawConversation(float x, float y, float w, float h) {
 // drawMessage draws one message as disky does: names in a column on the
 // left (at the start of each run), the message beside them, every other
 // run on a band, the row lit while hovered.
-void App::drawMessage(Message& m, const Conversation&, float width, bool firstOfRun, const Chat& chat, bool alt) {
+void App::drawMessage(Message& m, const Conversation&, float width, bool firstOfRun, const Chat& chat, bool alt,
+                      bool tickChange) {
     const Palette& p = Colours();
     const float k = scale_;
     constexpr float kNames = 130;
@@ -1571,19 +1589,20 @@ void App::drawMessage(Message& m, const Conversation&, float width, bool firstOf
     bool hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && mouse.y >= r0.y && mouse.y < r1.y &&
                !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
     // Time on the right: always at a run's start, else while hovered; own
-    // messages get ticks (one sent, two delivered, two blue read).
-    if (firstOfRun || hov) {
+    // messages get ticks (one sent, two delivered, two blue read), also on
+    // any row in a run whose receipt differs from the row above.
+    if (firstOfRun || hov || tickChange) {
         ImGui::PushFont(fonts_.regular, kSmall - 1);
         std::string t = clock(m.ts);
         ImVec2 ts = ImGui::CalcTextSize(t.c_str());
         float tx = o.x + width - ts.x - (m.fromMe ? 18 * k : 0);
-        dl->AddText(ImVec2(tx, textY + 1 * k), U32(p.muted), t.c_str());
+        if (firstOfRun || hov) dl->AddText(ImVec2(tx, textY + 1 * k), U32(p.muted), t.c_str());
         if (m.fromMe) {
-            ImU32 tc = m.status == "read" || m.status == "played" ? U32(p.accent) : U32(p.muted);
+            int tier = receiptTier(m.status);
+            ImU32 tc = tier == 2 ? U32(p.accent) : U32(p.muted);
             float cx = tx + ts.x + 4 * k;
             dl->AddText(ImVec2(cx, textY + 1 * k), tc, icon2::Check);
-            if (m.status == "delivered" || m.status == "read" || m.status == "played")
-                dl->AddText(ImVec2(cx + 5 * k, textY + 1 * k), tc, icon2::Check);
+            if (tier >= 1) dl->AddText(ImVec2(cx + 5 * k, textY + 1 * k), tc, icon2::Check);
         }
         ImGui::PopFont();
     }

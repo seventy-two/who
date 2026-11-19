@@ -104,7 +104,8 @@ private:
     void drawTitle(float width);
     void drawChats(float x, float y, float w, float h);
     void drawConversation(float x, float y, float w, float h);
-    void drawMessage(Message& m, const Conversation& c, float width, bool firstOfRun, const Chat& chat, bool alt);
+    void drawMessage(Message& m, const Conversation& c, float width, bool firstOfRun, const Chat& chat, bool alt,
+                     bool tickChange);
     void drawMedia(Message& m, float maxW);
     void drawComposer(float x, float y, float w, float h);
     void drawSignIn(float x, float y, float w, float h);
