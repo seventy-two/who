@@ -991,13 +991,13 @@ bool App::iconButton(const char* glyph, const char* tip, bool on, float size, bo
 // inputGlow draws a soft accent halo just outside an input box, so it's
 // clear which box is taking what you type.
 static void inputGlow(ImDrawList* dl, ImVec2 a, ImVec2 b, ImVec4 c, float k) {
-    for (int i = 4; i >= 1; i--) {
+    for (int i = 3; i >= 1; i--) {
         ImVec4 col = c;
-        col.w = 0.07f * (5 - i);
+        col.w = 0.05f * (4 - i);
         float d = (i - 0.5f) * k;
         dl->AddRect(ImVec2(a.x - d, a.y - d), ImVec2(b.x + d, b.y + d), ImGui::GetColorU32(col), 0, 0, k);
     }
-    c.w = 0.75f;
+    c.w = 0.45f;
     dl->AddRect(a, b, ImGui::GetColorU32(c), 0, 0, k);
 }
 
@@ -1609,18 +1609,18 @@ void App::drawMessage(Message& m, const Conversation&, float width, bool firstOf
     bool hov = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && mouse.y >= r0.y && mouse.y < r1.y &&
                !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
     // Time on the right: always at a run's start, else while hovered; own
-    // messages get ticks (one sent, two delivered, two blue read), also on
+    // messages get ticks to its left (one sent, two delivered, two blue read), also on
     // any row in a run whose receipt differs from the row above.
     if (firstOfRun || hov || tickChange) {
         ImGui::PushFont(fonts_.regular, kSmall - 1);
         std::string t = clock(m.ts);
         ImVec2 ts = ImGui::CalcTextSize(t.c_str());
-        float tx = o.x + width - ts.x - (m.fromMe ? 18 * k : 0);
+        float tx = o.x + width - ts.x;  // flush right, so times line up
         if (firstOfRun || hov) dl->AddText(ImVec2(tx, textY + 1 * k), U32(p.muted), t.c_str());
         if (m.fromMe) {
             int tier = receiptTier(m.status);
             ImU32 tc = tier == 2 ? U32(p.accent) : U32(p.muted);
-            float cx = tx + ts.x + 4 * k;
+            float cx = tx - 18 * k;  // ticks sit left of the time
             dl->AddText(ImVec2(cx, textY + 1 * k), tc, icon2::Check);
             if (tier >= 1) dl->AddText(ImVec2(cx + 5 * k, textY + 1 * k), tc, icon2::Check);
         }
