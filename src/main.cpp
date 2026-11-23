@@ -114,6 +114,15 @@ void renderFrame() {
     rendering = false;
 }
 
+// fullscreenInFront says another app is fullscreen in front of us (a
+// game, a video, a presentation).
+bool fullscreenInFront(HWND self) {
+    if (GetForegroundWindow() == self) return false;
+    QUERY_USER_NOTIFICATION_STATE st;
+    if (FAILED(SHQueryUserNotificationState(&st))) return false;
+    return st == QUNS_BUSY || st == QUNS_RUNNING_D3D_FULL_SCREEN || st == QUNS_PRESENTATION_MODE;
+}
+
 // unreadIcon draws the app icon with a green dot in the corner, for the
 // tray when there's something unread.
 HICON unreadIcon(HICON base, int size) {
@@ -396,8 +405,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
 
     bool running = true;
     while (running) {
-        bool visible = IsWindowVisible(hwnd) && !IsIconic(hwnd);
-        DWORD timeout = framesWanted > 0 ? 0 : visible && app->Animating() ? 33 : visible ? 1000 : 5000;
+        // Behind a fullscreen game nothing is drawn: presenting frames
+        // there made the game's frame pacing hitch. Checked each second
+        // so the window catches up soon after the game's gone.
+        bool visible = IsWindowVisible(hwnd) && !IsIconic(hwnd) && !fullscreenInFront(hwnd);
+        bool front = visible && GetForegroundWindow() == hwnd;
+        DWORD timeout = framesWanted > 0                    ? 0
+                        : visible && app->Animating() ? (front ? 33 : 100)
+                        : visible                           ? 1000
+                        : IsWindowVisible(hwnd)             ? 1000
+                                                            : 5000;
         MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
