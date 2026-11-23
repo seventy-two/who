@@ -426,7 +426,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
         if (!running) break;
         app->Pump();
         updateUnread();
-        if (!visible) continue;
+        // Frames asked for while nothing's drawn are dropped, or the zero
+        // timeout above would spin the loop until the window came back.
+        if (!visible) {
+            framesWanted = 0;
+            continue;
+        }
         renderFrame();
         if (framesWanted > 0) framesWanted--;
     }
